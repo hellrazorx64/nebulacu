@@ -68,11 +68,6 @@ class NebulaGui:
         self.key_entry.grid(row=2, column=1)
         self.key_entry.insert(0, self.config['pki']['key'])
 
-        tk.Label(self.config_tab, text="Lighthouse Host:").grid(row=3, column=0)
-        self.lighthouse_entry = tk.Entry(self.config_tab, width=50)
-        self.lighthouse_entry.grid(row=3, column=1)
-        self.lighthouse_entry.insert(0, list(self.config['static_host_map'].keys())[0])
-
         tk.Button(self.config_tab, text="Save Config", command=self.save_config).grid(row=4, columnspan=2)
 
     def create_firewall_ui(self):
@@ -84,10 +79,6 @@ class NebulaGui:
         # Load firewall rules from config
         self.load_firewall_rules()
 
-        # Button to add a new rule
-        tk.Button(self.firewall_tab, text="Add Rule", command=self.open_add_rule_dialog).pack(pady=5)
-        tk.Button(self.firewall_tab, text="Remove Rule", command=self.remove_rule).pack(pady=5)
-
     def load_firewall_rules(self):
         # Load firewall rules from the configuration
         self.firewall_listbox.delete(0, tk.END)  # Clear existing rules
@@ -97,77 +88,19 @@ class NebulaGui:
             for rule in self.config['firewall']['outbound']:
                 self.firewall_listbox.insert(tk.END, f"Outbound: {rule}")
 
-    def open_add_rule_dialog(self):
-        """Open a dialog to add a new firewall rule."""
-        dialog = tk.Toplevel(self.master)
-        dialog.title("Add Firewall Rule")
-
-        tk.Label(dialog, text="Comment:").grid(row=0, column=0)
-        comment_entry = tk.Entry(dialog, width=50)
-        comment_entry.grid(row=0, column=1)
-
-        tk.Label(dialog, text="Direction:").grid(row=1, column=0)
-        direction_var = tk.StringVar(value="Inbound")
-        tk.Radiobutton(dialog, text="Inbound", variable=direction_var, value="Inbound").grid(row=1, column=1, sticky=tk.W)
-        tk.Radiobutton(dialog, text="Outbound", variable=direction_var, value="Outbound").grid(row=1, column=1, sticky=tk.E)
-
-        tk.Label(dialog, text="Port:").grid(row=2, column=0)
-        port_entry = tk.Entry(dialog, width=50)
-        port_entry.grid(row=2, column=1)
-
-        tk.Label(dialog, text="Protocol:").grid(row=3, column=0)
-        proto_entry = tk.Entry(dialog, width=50)
-        proto_entry.grid(row=3, column=1)
-
-        tk.Label(dialog, text="Host:").grid(row=4, column=0)
-        host_entry = tk.Entry(dialog, width=50)
-        host_entry.grid(row=4, column=1)
-
-        tk.Label(dialog, text="Group:").grid(row=5, column=0)
-        group_entry = tk.Entry(dialog, width=50)
-        group_entry.grid(row=5, column=1)
-
-        def add_rule():
-            comment = comment_entry.get()
-            direction = direction_var.get()
-            port = port_entry.get()
-            proto = proto_entry.get()
-            host = host_entry.get()
-            group = group_entry.get()
-
-            if not all([comment, direction, port, proto, host, group]):
-                messagebox.showerror("Error", "All fields must be filled out.")
-                return
-
-            rule = f"{direction}: {comment} (Port: {port}, Proto: {proto}, Host: {host}, Group: {group})"
-            self.firewall_listbox.insert(tk.END, rule)
-            dialog.destroy()
-
-        tk.Button(dialog, text="Add Rule", command=add_rule).grid(row=6, columnspan=2, pady=10)
-
-    def remove_rule(self):
-        selected_rule_index = self.firewall_listbox.curselection()
-        if selected_rule_index:
-            self.firewall_listbox.delete(selected_rule_index)
-
     def save_config(self):
         # Save the updated configuration to config.yaml
         self.config['pki']['ca'] = self.ca_entry.get()
         self.config['pki']['cert'] = self.cert_entry.get()
         self.config['pki']['key'] = self.key_entry.get()
-        self.config['static_host_map'] = {self.lighthouse_entry.get(): ['lh1.neb.primeghz.com:4242']}
 
-        # Save firewall rules
-        self.config['firewall']['inbound'] = []
-        self.config['firewall']['outbound'] = []
-        for rule in self.firewall_listbox.get(0, tk.END):
-            if rule.startswith("Inbound:"):
-                self.config['firewall']['inbound'].append(rule[9:])  # Remove "Inbound: " prefix
-            elif rule.startswith("Outbound:"):
-                self.config['firewall']['outbound'].append(rule[10:])  # Remove "Outbound: " prefix
+        # Remove the static host map entirely
+        if 'static_host_map' in self.config:
+            del self.config['static_host_map']
 
+        # Write the configuration to the YAML file
         with open('nebula/config.yaml', 'w') as file:
-            yaml.dump(self.config, file)
+            yaml.dump(self.config, file, default_flow_style=False)  # Ensure proper YAML formatting
         messagebox.showinfo("Info", "Configuration saved successfully.")
 
     def load_config(self):
