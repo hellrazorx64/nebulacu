@@ -2,3 +2,4 @@
 ./new_venv
 *.crt
 *.key
+nebula/
