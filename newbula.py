@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk, filedialog
 import subprocess
 import os
 import psutil
@@ -7,6 +7,8 @@ import yaml
 import threading
 import ctypes
 import sys
+import pystray
+from PIL import Image, ImageDraw
 
 def is_admin():
     """Check if the script is running with admin privileges."""
@@ -57,18 +59,21 @@ class NebulaGui:
         self.ca_entry = tk.Entry(self.config_tab, width=50)
         self.ca_entry.grid(row=0, column=1)
         self.ca_entry.insert(0, self.config['pki']['ca'])
+        tk.Button(self.config_tab, text="Browse", command=self.browse_ca).grid(row=0, column=2)
 
         tk.Label(self.config_tab, text="Host Certificate Path:").grid(row=1, column=0)
         self.cert_entry = tk.Entry(self.config_tab, width=50)
         self.cert_entry.grid(row=1, column=1)
         self.cert_entry.insert(0, self.config['pki']['cert'])
+        tk.Button(self.config_tab, text="Browse", command=self.browse_cert).grid(row=1, column=2)
 
         tk.Label(self.config_tab, text="Host Key Path:").grid(row=2, column=0)
         self.key_entry = tk.Entry(self.config_tab, width=50)
         self.key_entry.grid(row=2, column=1)
         self.key_entry.insert(0, self.config['pki']['key'])
+        tk.Button(self.config_tab, text="Browse", command=self.browse_key).grid(row=2, column=2)
 
-        tk.Button(self.config_tab, text="Save Config", command=self.save_config).grid(row=4, columnspan=2)
+        tk.Button(self.config_tab, text="Save Config", command=self.save_config).grid(row=4, columnspan=3)
 
     def create_firewall_ui(self):
         # Create UI elements for firewall rules
@@ -115,8 +120,10 @@ class NebulaGui:
     def toggle_connection(self):
         if self.connect_button['text'] == "Connect":
             self.start_nebula()
+            threading.Thread(target=update_tray_icon, args=(True,), daemon=True).start()
         else:
             self.stop_nebula()
+            threading.Thread(target=update_tray_icon, args=(False,), daemon=True).start()
 
     def start_nebula(self):
         self.status_label.config(text="Status: Connecting")
@@ -163,9 +170,62 @@ class NebulaGui:
             self.process.wait()  # Wait for the process to terminate
         self.status_label.config(text="Status: Disconnected")
         self.connect_button.config(state=tk.NORMAL)  # Re-enable the connect button
+        threading.Thread(target=update_tray_icon, args=(False,), daemon=True).start()
+
+    def browse_ca(self):
+        filename = filedialog.askopenfilename(title="Select CA Certificate", filetypes=[("Certificate Files", "*.crt")])
+        if filename:
+            self.ca_entry.delete(0, tk.END)
+            self.ca_entry.insert(0, filename)
+
+    def browse_cert(self):
+        filename = filedialog.askopenfilename(title="Select Host Certificate", filetypes=[("Certificate Files", "*.crt")])
+        if filename:
+            self.cert_entry.delete(0, tk.END)
+            self.cert_entry.insert(0, filename)
+
+    def browse_key(self):
+        filename = filedialog.askopenfilename(title="Select Host Key", filetypes=[("Key Files", "*.key")])
+        if filename:
+            self.key_entry.delete(0, tk.END)
+            self.key_entry.insert(0, filename)
+
+# Global variable to hold the tray icon and a lock for thread safety
+tray_icon = None
+icon_lock = threading.Lock()
+
+def update_tray_icon(active):
+    global tray_icon
+    with icon_lock:  # Ensure thread safety
+        if tray_icon is None:
+            tray_icon = pystray.Icon("Nebula")
+            tray_icon.icon = Image.open("active.ico" if active else "inactive.ico")
+            tray_icon.menu = pystray.Menu(
+                pystray.MenuItem("Connect", on_connect),
+                pystray.MenuItem("Disconnect", on_disconnect),
+                pystray.MenuItem("Exit", on_exit)
+            )
+            threading.Thread(target=tray_icon.run, daemon=True).start()  # Start the icon in a new thread
+        else:
+            tray_icon.icon = Image.open("active.ico" if active else "inactive.ico")
+
+def on_connect(icon, item):
+    app.toggle_connection()  # Call the toggle connection method
+
+def on_disconnect(icon, item):
+    app.stop_nebula()  # Call the stop method
+
+def on_exit(icon, item):
+    app.stop_nebula()  # Ensure nebula.exe is terminated
+    if tray_icon:
+        tray_icon.stop()  # Stop the icon
+
+def setup(icon):
+    icon.visible = True
 
 if __name__ == "__main__":
     run_as_admin()  # Check for admin rights and relaunch if necessary
     root = tk.Tk()
     app = NebulaGui(root)
+    update_tray_icon(False)  # Start the tray icon
     root.mainloop()
