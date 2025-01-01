@@ -9,6 +9,14 @@ import ctypes
 import sys
 import pystray
 from PIL import Image, ImageDraw
+from plyer import notification
+import logging
+
+# Set up logging
+logging.basicConfig(filename='app.log', level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Log the start of the program
+logging.debug("Program started.")
 
 def is_admin():
     """Check if the script is running with admin privileges."""
@@ -29,6 +37,9 @@ class NebulaGui:
         self.master = master
         self.master.title("Nebula Mesh Client Control")
         
+        # Initialize notifications_enabled
+        self.notifications_enabled = tk.BooleanVar(value=False)
+        
         self.connect_button = tk.Button(master, text="Connect", command=self.toggle_connection, state=tk.DISABLED)
         self.connect_button.pack(pady=20)
 
@@ -45,13 +56,13 @@ class NebulaGui:
         self.tab_control.add(self.console_tab, text='Console')
         self.tab_control.pack(expand=1, fill='both')
 
-        self.load_config()
-
-        # Configuration UI Elements
-        self.create_config_ui()
-        self.create_firewall_ui()
+        # Initialize console output
         self.console_output = tk.Text(self.console_tab, wrap=tk.WORD, state=tk.DISABLED)
         self.console_output.pack(expand=1, fill='both')
+
+        self.load_config()
+        self.create_config_ui()
+        self.create_firewall_ui()
 
     def create_config_ui(self):
         # Create UI elements for configuration
@@ -73,6 +84,9 @@ class NebulaGui:
         self.key_entry.insert(0, self.config['pki']['key'])
         tk.Button(self.config_tab, text="Browse", command=self.browse_key).grid(row=2, column=2)
 
+        # Checkbox for notifications
+        tk.Checkbutton(self.config_tab, text="Enable Notifications", variable=self.notifications_enabled).grid(row=3, columnspan=3)
+
         tk.Button(self.config_tab, text="Save Config", command=self.save_config).grid(row=4, columnspan=3)
 
     def create_firewall_ui(self):
@@ -88,10 +102,12 @@ class NebulaGui:
         # Load firewall rules from the configuration
         self.firewall_listbox.delete(0, tk.END)  # Clear existing rules
         if 'firewall' in self.config:
-            for rule in self.config['firewall']['inbound']:
-                self.firewall_listbox.insert(tk.END, f"Inbound: {rule}")
-            for rule in self.config['firewall']['outbound']:
-                self.firewall_listbox.insert(tk.END, f"Outbound: {rule}")
+            if 'inbound' in self.config['firewall']:
+                for rule in self.config['firewall']['inbound']:
+                    self.firewall_listbox.insert(tk.END, f"Inbound: {rule}")
+            if 'outbound' in self.config['firewall']:
+                for rule in self.config['firewall']['outbound']:
+                    self.firewall_listbox.insert(tk.END, f"Outbound: {rule}")
 
     def save_config(self):
         # Save the updated configuration to config.yaml
@@ -120,9 +136,11 @@ class NebulaGui:
     def toggle_connection(self):
         if self.connect_button['text'] == "Connect":
             self.start_nebula()
+            self.notify_user("Connected to Nebula.")
             threading.Thread(target=update_tray_icon, args=(True,), daemon=True).start()
         else:
             self.stop_nebula()
+            self.notify_user("Disconnected from Nebula.")
             threading.Thread(target=update_tray_icon, args=(False,), daemon=True).start()
 
     def start_nebula(self):
@@ -190,6 +208,15 @@ class NebulaGui:
             self.key_entry.delete(0, tk.END)
             self.key_entry.insert(0, filename)
 
+    def notify_user(self, message):
+        if self.notifications_enabled.get():
+            notification.notify(
+                title="Nebula Mesh Client",
+                message=message,
+                app_name="Nebula",
+                timeout=10
+            )
+
 # Global variable to hold the tray icon and a lock for thread safety
 tray_icon = None
 icon_lock = threading.Lock()
@@ -224,8 +251,18 @@ def setup(icon):
     icon.visible = True
 
 if __name__ == "__main__":
-    run_as_admin()  # Check for admin rights and relaunch if necessary
-    root = tk.Tk()
-    app = NebulaGui(root)
-    update_tray_icon(False)  # Start the tray icon
-    root.mainloop()
+    try:
+        # Check for admin rights first
+        if not is_admin():
+            run_as_admin()
+        else:
+            # Only create the GUI if we're running as admin
+            logging.debug("Starting application with admin privileges")
+            root = tk.Tk()
+            app = NebulaGui(root)
+            update_tray_icon(False)  # Start the tray icon
+            root.mainloop()
+    except Exception as e:
+        logging.error("An error occurred: %s", e)
+        # Keep the window open if there's an error
+        input("Press Enter to exit...")
