@@ -37,8 +37,11 @@ class NebulaGui:
         self.master = master
         self.master.title("Nebula Mesh Client Control")
         
+        # Override window close button (X)
+        self.master.protocol("WM_DELETE_WINDOW", self.minimize_to_tray)
+        
         # Initialize notifications_enabled
-        self.notifications_enabled = tk.BooleanVar(value=False)
+        self.notifications_enabled = tk.BooleanVar(value=True)
         
         self.connect_button = tk.Button(master, text="Connect", command=self.toggle_connection, state=tk.DISABLED)
         self.connect_button.pack(pady=20)
@@ -63,6 +66,10 @@ class NebulaGui:
         self.load_config()
         self.create_config_ui()
         self.create_firewall_ui()
+
+        # Add a variable to store the lighthouse hostnames from static_host_map
+        self.lighthouse_hosts = set()
+        self.load_lighthouse_hosts()
 
     def create_config_ui(self):
         # Create UI elements for configuration
@@ -115,10 +122,6 @@ class NebulaGui:
         self.config['pki']['cert'] = self.cert_entry.get()
         self.config['pki']['key'] = self.key_entry.get()
 
-        # Remove the static host map entirely
-        if 'static_host_map' in self.config:
-            del self.config['static_host_map']
-
         # Write the configuration to the YAML file
         with open('nebula/config.yaml', 'w') as file:
             yaml.dump(self.config, file, default_flow_style=False)  # Ensure proper YAML formatting
@@ -147,6 +150,9 @@ class NebulaGui:
         self.status_label.config(text="Status: Connecting")
         self.connect_button.config(text="Disconnect")
         
+        # Reload lighthouse hosts in case config has changed
+        self.load_lighthouse_hosts()
+        
         # Construct the command to launch nebula.exe with the config file
         current_folder = os.getcwd()  # Get the current working directory
         command = [os.path.join(current_folder, 'nebula', 'nebula.exe'), 
@@ -161,22 +167,47 @@ class NebulaGui:
         self.master.after(1000, self.check_nebula_status)
 
     def monitor_output(self):
-        # Monitor the output from the Nebula process
+        """Monitor the output from the Nebula process"""
         for line in iter(self.process.stdout.readline, ''):
             self.console_output.config(state=tk.NORMAL)
             self.console_output.insert(tk.END, line)
-            self.console_output.see(tk.END)  # Scroll to the end
+            self.console_output.see(tk.END)
             self.console_output.config(state=tk.DISABLED)
 
+            # Parse the line for connection status
+            self.parse_nebula_output(line)
+
+    def parse_nebula_output(self, line):
+        """Parse nebula output for connection status changes"""
+        try:
+            # Check for handshake message
+            if "msg=\"Handshake message received\"" in line:
+                for host in self.lighthouse_hosts:
+                    if f"certName={host}" in line:
+                        self.status_label.config(text="Status: Connected")
+                        self.connect_button.config(text="Disconnect")
+                        return
+
+            # Check for tunnel closing message
+            if "msg=\"Close tunnel received, tearing down.\"" in line:
+                for host in self.lighthouse_hosts:
+                    if f"certName={host}" in line:
+                        self.status_label.config(text="Status: Disconnected")
+                        self.connect_button.config(text="Stop")
+                        self.notify_user("Connection lost. Attempting to reconnect...")
+                        # Update tray icon to warning state
+                        threading.Thread(target=update_tray_icon, args=("warning",), daemon=True).start()
+                        return
+
+        except Exception as e:
+            logging.error(f"Error parsing nebula output: {e}")
+
     def check_nebula_status(self):
-        # Check if the nebula process is running
-        if self.process.poll() is None:  # Process is still running
-            self.status_label.config(text="Status: Connected")
-            self.connect_button.config(text="Disconnect")
-        else:
+        # Only check if process is running, status changes are handled by parse_nebula_output
+        if self.process.poll() is not None:  # Process has terminated
             self.status_label.config(text="Status: Disconnected")
             self.connect_button.config(text="Connect")
-
+        
         # Check again after 1 second
         self.master.after(1000, self.check_nebula_status)
 
@@ -217,35 +248,65 @@ class NebulaGui:
                 timeout=10
             )
 
+    def minimize_to_tray(self):
+        """Minimize the window to system tray instead of closing"""
+        self.master.withdraw()  # Hide the window
+        self.notify_user("Application minimized to tray")
+
+    def show_window(self):
+        """Show the window when requested from tray"""
+        self.master.deiconify()  # Show the window
+        self.master.lift()  # Bring it to front
+        self.master.focus_force()  # Force focus
+
+    def load_lighthouse_hosts(self):
+        """Load lighthouse hostnames from static_host_map in config"""
+        if 'static_host_map' in self.config:
+            for hosts in self.config['static_host_map'].values():
+                for host in hosts:
+                    # Extract hostname from host:port format
+                    hostname = host.split(':')[0]
+                    self.lighthouse_hosts.add(hostname)
+
 # Global variable to hold the tray icon and a lock for thread safety
 tray_icon = None
 icon_lock = threading.Lock()
 
-def update_tray_icon(active):
+def update_tray_icon(state):
     global tray_icon
     with icon_lock:  # Ensure thread safety
         if tray_icon is None:
             tray_icon = pystray.Icon("Nebula")
-            tray_icon.icon = Image.open("active.ico" if active else "inactive.ico")
+            # Choose icon based on state
+            if state == "warning":
+                tray_icon.icon = Image.open("warning.ico")
+            else:
+                tray_icon.icon = Image.open("active.ico" if state else "inactive.ico")
             tray_icon.menu = pystray.Menu(
-                pystray.MenuItem("Connect", on_connect),
-                pystray.MenuItem("Disconnect", on_disconnect),
+                pystray.MenuItem("Show", lambda: app.show_window()),
+                pystray.MenuItem("Connect/Disconnect", on_connect),
                 pystray.MenuItem("Exit", on_exit)
             )
-            threading.Thread(target=tray_icon.run, daemon=True).start()  # Start the icon in a new thread
+            threading.Thread(target=tray_icon.run, daemon=True).start()
         else:
-            tray_icon.icon = Image.open("active.ico" if active else "inactive.ico")
+            # Update existing icon based on state
+            if state == "warning":
+                tray_icon.icon = Image.open("warning.ico")
+            else:
+                tray_icon.icon = Image.open("active.ico" if state else "inactive.ico")
 
 def on_connect(icon, item):
     app.toggle_connection()  # Call the toggle connection method
 
-def on_disconnect(icon, item):
-    app.stop_nebula()  # Call the stop method
+#def on_disconnect(icon, item):
+#    app.stop_nebula()  # Call the stop method
 
 def on_exit(icon, item):
     app.stop_nebula()  # Ensure nebula.exe is terminated
     if tray_icon:
         tray_icon.stop()  # Stop the icon
+    app.master.destroy()  # Close the GUI window
+    sys.exit()  # Ensure complete exit
 
 def setup(icon):
     icon.visible = True
